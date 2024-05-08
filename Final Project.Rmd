@@ -1,0 +1,358 @@
+---
+title: "Final Project"
+author: "Yueyi Xu"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(tidymodels)
+library(pls)
+library(corrplot)
+library(knitr)
+library(patchwork)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(klaR)
+library(factoextra) 
+library(gridExtra) 
+library(corrplot) 
+library(RColorBrewer) 
+library(gplots) 
+library(jpeg)
+library(ranger)  
+library(earth)   
+library(e1071)   
+library(gbm)   
+
+load("severity_test.RData")
+load("severity_training.RData")
+```
+
+```{r}
+training_data <- training_data %>%
+  janitor::clean_names() %>%
+  dplyr::select(-id) %>%
+  mutate(severity = case_match(as.numeric(severity),
+                               1 ~ "Not Severe",
+                               2 ~ "Severe"),
+         severity = factor(severity),
+         gender = case_match(gender,
+                             1 ~ "Male",
+                             0 ~ "Female"),
+         race = case_match(as.numeric(race),
+                           1 ~ "White",
+                           2 ~ "Asian",
+                           3 ~ "Black",
+                           4 ~ "Hispanic"),
+         smoking = case_match(as.numeric(smoking),
+                              1 ~ "Never",
+                              2 ~ "Former",
+                              3 ~ "Current"),
+         hypertension = case_match(hypertension,
+                                   0 ~ "No",
+                                   1 ~ "Yes"),
+         diabetes = case_match(diabetes,
+                               0 ~ "No",
+                               1 ~ "Yes"),
+         vaccine = case_match(vaccine,
+                              0 ~ "Not Vaccinated",
+                              1 ~ "Vaccinated")
+         )
+```
+
+```{r}
+test_data <- test_data %>%
+  janitor::clean_names() %>%
+  dplyr::select(-id) %>%
+  mutate(severity = case_match(as.numeric(severity),
+                               1 ~ "Not Severe",
+                               2 ~ "Severe"),
+         severity = factor(severity),
+         gender = case_match(gender,
+                             1 ~ "Male",
+                             0 ~ "Female"),
+         race = case_match(as.numeric(race),
+                           1 ~ "White",
+                           2 ~ "Asian",
+                           3 ~ "Black",
+                           4 ~ "Hispanic"),
+         smoking = case_match(as.numeric(smoking),
+                              1 ~ "Never",
+                              2 ~ "Former",
+                              3 ~ "Current"),
+         hypertension = case_match(hypertension,
+                                   0 ~ "No",
+                                   1 ~ "Yes"),
+         diabetes = case_match(diabetes,
+                               0 ~ "No",
+                               1 ~ "Yes"),
+         vaccine = case_match(vaccine,
+                              0 ~ "Not Vaccinated",
+                              1 ~ "Vaccinated")
+         )
+```
+
+
+
+# Exploratory analysis and data visualization
+
+We will create box plots for continuous predictors such as Age, BMI, Systolic blood pressure (SBP), and LDL cholesterol (LDL). These plots will show how these metrics vary with the severity of COVID-19.
+
+```{r}
+# Boxplot for Age vs. Severity
+ggplot(training_data, aes(x = factor(severity), y = age, fill = factor(severity))) +
+  geom_boxplot() +
+  labs(title = "Age vs. COVID-19 Severity", x = "Severity", y = "Age") +
+  scale_fill_brewer(palette = "Set1")
+
+# Boxplot for BMI vs. Severity
+ggplot(training_data, aes(x = factor(severity), y = bmi, fill = factor(severity))) +
+  geom_boxplot() +
+  labs(title = "BMI vs. COVID-19 Severity", x = "Severity", y = "BMI") +
+  scale_fill_brewer(palette = "Set1")
+
+# Boxplot for SBP vs. Severity
+ggplot(training_data, aes(x = factor(severity), y = sbp, fill = factor(severity))) +
+  geom_boxplot() +
+  labs(title = "Systolic Blood Pressure vs. COVID-19 Severity", x = "Severity", y = "Systolic BP") +
+  scale_fill_brewer(palette = "Set1")
+
+# Boxplot for LDL vs. Severity
+ggplot(training_data, aes(x = factor(severity), y = ldl, fill = factor(severity))) +
+  geom_boxplot() +
+  labs(title = "LDL Cholesterol vs. COVID-19 Severity", x = "Severity", y = "LDL Cholesterol") +
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+We will visualize the relationship between categorical predictors and severity. We will focus on gender, smoking status, hypertension, diabetes, and vaccination status. We will use bar plots showing the proportion within each severity category.
+
+
+```{r}
+# Function to create proportion bar plots
+create_prop_plot <- function(data, varname) {
+  data %>%
+    group_by(severity, !!sym(varname)) %>%
+    summarise(Count = n(), .groups = 'drop') %>%
+    mutate(Prop = Count / sum(Count)) %>%
+    ggplot(aes(x = factor(severity), y = Prop, fill = factor(!!sym(varname)))) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    labs(title = paste(varname, "vs. COVID-19 Severity"), x = "Severity", y = "Proportion") +
+    scale_fill_brewer(palette = "Set1")
+}
+
+# Generate plots
+create_prop_plot(training_data, "gender")
+create_prop_plot(training_data, "smoking")
+create_prop_plot(training_data, "hypertension")
+create_prop_plot(training_data, "diabetes")
+create_prop_plot(training_data, "vaccine")
+```
+
+
+```{r}
+dat_continuous <- training_data %>% 
+  dplyr::select("age", "height", "weight", "bmi", "sbp", "ldl")
+
+corrplot(cor(dat_continuous), method = 'number', type = 'lower') 
+```
+
+
+
+Conclusion:
+
+1. Age (box plot)
+Age has shown a distinct distribution between severe and non-severe COVID-19 cases, with older individuals tending to have more severe outcomes. Given the visible difference in the age distributions between severity groups, age is a crucial variable that could help the model capture risk stratification more effectively.
+
+2. SBP (box plot)
+The boxplot showing higher SBP in severe COVID-19 cases supports its inclusion, reflecting the impact of cardiovascular health on disease outcomes. High blood pressure is known to compromise vascular integrity and could exacerbate COVID-19 severity.
+
+3. Diabetes (bar plot)
+Diabetes has a notable impact on immune system efficiency. The higher proportion of severe cases among diabetics in your data supports the inclusion of this variable, reflecting the metabolic and immune challenges posed by this condition.
+
+4. Vaccine (bar plot)
+There’s a significant difference in COVID-19 severity between vaccinated and unvaccinated individuals, as seen in the bar plots. Including vaccination status can help quantify the protective effect of vaccines against severe COVID-19, which is crucial for the model.
+
+5. Age + Height + Weight + BMI + SBP + LDL (correlation plot)
+Age-Related Increases in SBP and LDL: The moderate correlations of age with SBP and LDL highlight common age-related health risks.
+Height, Weight, and BMI: The relationships among these three are as expected, with height inversely related to BMI when weight is constant, but weight strongly driving increases in BMI.
+BMI and SBP: The strong positive correlation is significant from a health perspective, reinforcing the importance of weight management in controlling or preventing hypertension.
+Therefore,  building models could help quantify the impact of these variables on each other, particularly useful for predicting health outcomes based on changes in BMI, SBP, or age.
+
+
+# Model Training
+
+```{r}
+ctrl <- trainControl(method = "cv",
+                     number = 10,
+                     savePredictions = "final")
+```
+
+
+### MARS
+
+```{r}
+set.seed(1)
+mars_grid <- expand.grid(degree = 1:3, 
+                         nprune = 2:20)
+mars.fit <- train(severity ~ ., 
+                  data = training_data, 
+                  method = "earth",
+                  tuneGrid = mars_grid, 
+                  trControl = ctrl)
+
+ggplot(mars.fit)
+
+mars.fit$bestTune
+coef(mars.fit$finalModel)
+
+mars.pred <- predict(mars.fit, newdata = test_data)
+confusionMatrix(data = as.factor(mars.pred), 
+                reference = test_data$severity, 
+                positive = "Severe")
+```
+
+
+### Penalized Logistic Regression
+
+```{r}
+set.seed(1)
+glmnGrid <- expand.grid(.alpha = seq(0, 1, length = 21),
+                        .lambda = exp(seq(-5, 1, length = 100)))
+
+glmn.fit <- train(severity ~.,
+                  data = training_data, 
+                  method = "glmnet",
+                  tuneGrid = glmnGrid,
+                  metric = "Accuracy",
+                  trControl = ctrl)
+
+print(glmn.fit$bestTune)
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol))
+plot(glmn.fit, par.settings = myPar, xTrans = function(x) log(x))
+```
+
+
+### SVM
+```{r}
+svmr.grid <- expand.grid(C = exp(seq(1, 7, len = 50)),
+                         sigma = exp(seq(-10, -2, len = 20)))
+
+set.seed(1)
+svmr.fit <- train(severity ~ . , 
+                  data = training_data,
+                  method = "svmRadialSigma",
+                  tuneGrid = svmr.grid,
+                  trControl = ctrl)
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line = list(col = myCol)) 
+plot(svmr.fit, highlight = TRUE, par.settings = myPar)
+
+svmr.pred <- predict(svmr.fit, newdata = test_data)
+
+confusionMatrix(data = as.factor(svmr.pred),
+                reference = test_data$severity,
+                positive = "Severe")
+```
+
+
+### Random Forest
+```{r}
+rf.grid <- expand.grid(mtry = 1:13,
+                       splitrule = "gini",
+                       min.node.size = 1:6)
+set.seed(1)
+rf.fit <- train(severity ~ ., 
+                  data = training_data,
+                  method = "ranger",
+                  tuneGrid = rf.grid,
+                  trControl = ctrl)
+rf.fit$bestTune
+
+ggplot(rf.fit, highlight = TRUE)
+
+rf.pred <- predict(rf.fit, newdata = test_data)
+
+confusionMatrix(data = as.factor(rf.pred),
+                reference = test_data$severity,
+                positive = "Severe")
+```
+
+
+### LDA
+
+```{r}
+set.seed(1)
+lda.fit <- train(severity ~.,
+                 data = training_data, 
+                 method = "lda",
+                 metric = "Accuracy",
+                 trControl = ctrl)
+
+lda.pred2 <- predict(lda.fit, newdata = test_data) 
+
+confusionMatrix(data = as.factor(lda.pred2),
+                reference = test_data$severity,
+                positive = "Severe")
+```
+
+
+### AdaBoost
+
+```{r}
+gbmA.grid <- expand.grid(n.trees = c(2000,3000,4000,5000),
+                         interaction.depth = 1:10,
+                         shrinkage = c(0.001,0.002,0.003),
+                         n.minobsinnode = 1)
+set.seed(1)
+gbmA.fit <- train(severity ~ .,
+                  data = training_data,
+                  method = "gbm",
+                  tuneGrid = gbmA.grid,
+                  trControl = ctrl,
+                  distribution = "adaboost",
+                  verbose = FALSE)
+gbmA.fit$bestTune
+
+ggplot(gbmA.fit, highlight = TRUE)
+
+gbmA.pred <- predict(gbmA.fit, newdata = test_data)
+
+confusionMatrix(data = as.factor(gbmA.pred),
+                reference = test_data$severity,
+                positive = "Severe")
+```
+
+
+### Compare all models
+
+```{r}
+resamp <- resamples(list(MARS = mars.fit,
+                         GLMN = glmn.fit,
+                         SVM = svmr.fit,
+                         RF = rf.fit,
+                         LDA = lda.fit,
+                         Boosting = gbmA.fit))
+summary(resamp)
+
+bwplot(resamp, metric = "Accuracy")
+```
+
+
+
